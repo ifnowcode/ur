@@ -8,12 +8,16 @@ const statusEl = document.getElementById("status");
 // P1 path: 0..19
 // P2 path: 0..19 (same track, but their pieces are distinguished by owner)
 // Rosettes at 3, 7, 13 (0-based)
+
+// one-player mode: human = P1, AI = P2
+const ONE_PLAYER = true;
+
 const BOARD_SIZE = 20;
 const PIECES_PER_PLAYER = 7;
 const ROSETTES = [3, 7, 13];
 
 let board = new Array(BOARD_SIZE).fill(null); // { owner: "P1"|"P2", id: number } or null
-let offBoard = { P1: 0, P2: 0 }; // borne off counts
+let offBoard = { P1: 0, P2: 0 };
 let startPieces = { P1: PIECES_PER_PLAYER, P2: PIECES_PER_PLAYER }; // in hand
 let currentPlayer = "P1";
 let rollValue = null;
@@ -29,6 +33,8 @@ function isRosette(i) {
 // Top row:   [ -  -  12 13 14 15 16 17 ]
 // Middle:    [  0  1  2  3  4  5  6  7 ]
 // Bottom:    [ -  -   8  9 10 11 18 19 ]
+
+// layout mapping
 const indexToGrid = [
   {row:1,col:0}, //0
   {row:1,col:1}, //1
@@ -75,10 +81,9 @@ function renderBoard() {
       // find if any index maps here
       const idx = indexToGrid.findIndex(p => p.row === r && p.col === c);
       if (idx !== -1) {
-        const displayIndex = idx;
         const idxLabel = document.createElement("div");
         idxLabel.className = "index";
-        idxLabel.textContent = displayIndex;
+        idxLabel.textContent = idx;
         cell.appendChild(idxLabel);
 
         if (isRosette(idx)) {
@@ -93,7 +98,9 @@ function renderBoard() {
           cell.appendChild(span);
         }
 
-        cell.addEventListener("click", () => onCellClick(idx));
+        if (!ONE_PLAYER || currentPlayer === "P1") {
+          cell.addEventListener("click", () => onCellClick(idx));
+        }
       }
 
       boardEl.appendChild(cell);
@@ -107,6 +114,8 @@ function updateTurnInfo() {
 
 function rollDice() {
   if (gameOver) return;
+  if (ONE_PLAYER && currentPlayer === "P2") return; // human only rolls for P1
+
   let sum = 0;
   do {
     sum = 0;
@@ -122,29 +131,35 @@ function rollDice() {
 
 function onCellClick(index) {
   if (gameOver) return;
+  if (currentPlayer !== "P1" && ONE_PLAYER) return;
   if (rollValue === null) {
     statusEl.textContent = "Roll the dice first.";
     return;
   }
 
+  handleMoveAtIndex(currentPlayer, index);
+}
+
+function handleMoveAtIndex(player, index) {
   const occupant = board[index];
 
   // Option 1: bring a new piece onto the board from start
   // Standard entry is at index 0 for both players
-  if (index === 0 && startPieces[currentPlayer] > 0) {
+
+  // entry from start at index 0 with roll 1
+  if (index === 0 && startPieces[player] > 0) {
     if (rollValue === 1) {
       if (!occupant) {
-        board[0] = { owner: currentPlayer, id: Date.now() };
-        startPieces[currentPlayer]--;
-        statusEl.textContent = `${currentPlayer} entered a new piece at 0.`;
-        endMove(0);
-      } else if (occupant.owner !== currentPlayer && !isRosette(0)) {
-        // capture on entry (rare but possible)
-        startPieces[occupant.owner]++; // send back to start pool
-        board[0] = { owner: currentPlayer, id: Date.now() };
-        startPieces[currentPlayer]--;
-        statusEl.textContent = `${currentPlayer} captured on entry at 0.`;
-        endMove(0);
+        board[0] = { owner: player, id: Date.now() + Math.random() };
+        startPieces[player]--;
+        statusEl.textContent = `${player} entered a new piece at 0.`;
+        endMove(0, player);
+      } else if (occupant.owner !== player && !isRosette(0)) {
+        startPieces[occupant.owner]++;
+        board[0] = { owner: player, id: Date.now() + Math.random() };
+        startPieces[player]--;
+        statusEl.textContent = `${player} captured on entry at 0.`;
+        endMove(0, player);
       } else {
         statusEl.textContent = "Cannot enter: occupied by own piece or rosette.";
       }
@@ -152,13 +167,12 @@ function onCellClick(index) {
     }
   }
 
-  // Option 2: move an existing piece
   if (!occupant) {
     statusEl.textContent = "Select one of your pieces or entry square.";
     return;
   }
 
-  if (occupant.owner !== currentPlayer) {
+  if (occupant.owner !== player) {
     statusEl.textContent = "You can only move your own pieces.";
     return;
   }
@@ -170,9 +184,9 @@ function onCellClick(index) {
     // must be exact to bear off
     if (targetIndex === BOARD_SIZE) {
       board[index] = null;
-      offBoard[currentPlayer]++;
-      statusEl.textContent = `${currentPlayer} bore off a piece from ${index}.`;
-      endMove(null);
+      offBoard[player]++;
+      statusEl.textContent = `${player} bore off a piece from ${index}.`;
+      endMove(null, player);
     } else {
       statusEl.textContent = "You cannot move beyond the end.";
     }
@@ -181,13 +195,13 @@ function onCellClick(index) {
 
   const targetOccupant = board[targetIndex];
 
-  if (targetOccupant && targetOccupant.owner === currentPlayer) {
+  // capture logic
+  if (targetOccupant && targetOccupant.owner === player) {
     statusEl.textContent = "You cannot land on your own piece.";
     return;
   }
 
-  // capture logic
-  if (targetOccupant && targetOccupant.owner !== currentPlayer) {
+  if (targetOccupant && targetOccupant.owner !== player) {
     if (isRosette(targetIndex)) {
       statusEl.textContent = "Cannot capture on a rosette.";
       return;
@@ -195,20 +209,20 @@ function onCellClick(index) {
     // capture
     board[targetIndex] = occupant;
     board[index] = null;
-    startPieces[targetOccupant.owner]++; // send captured piece back to start pool
-    statusEl.textContent = `${currentPlayer} captured an enemy at ${targetIndex}.`;
-    endMove(targetIndex);
+    startPieces[targetOccupant.owner]++;
+    statusEl.textContent = `${player} captured an enemy at ${targetIndex}.`;
+    endMove(targetIndex, player);
     return;
   }
 
   // simple move
   board[targetIndex] = occupant;
   board[index] = null;
-  statusEl.textContent = `${currentPlayer} moved from ${index} to ${targetIndex}.`;
-  endMove(targetIndex);
+  statusEl.textContent = `${player} moved from ${index} to ${targetIndex}.`;
+  endMove(targetIndex, player);
 }
 
-function endMove(finalIndex) {
+function endMove(finalIndex, player) {
   const extraTurn = finalIndex !== null && isRosette(finalIndex);
   rollValue = null;
   rollResultEl.textContent = "Roll: -";
@@ -223,6 +237,10 @@ function endMove(finalIndex) {
     statusEl.textContent += " Extra turn for landing on a rosette!";
   }
   renderBoard();
+
+  if (ONE_PLAYER && currentPlayer === "P2" && !gameOver) {
+    setTimeout(aiTurn, 600);
+  }
 }
 
 function switchPlayer() {
@@ -238,6 +256,98 @@ function checkWin() {
     statusEl.textContent = "Player 2 has borne off all pieces and wins!";
     gameOver = true;
   }
+}
+
+// ─────────────────────────────
+// AI SECTION (P2)
+// ─────────────────────────────
+
+function aiRoll() {
+  let sum = 0;
+  do {
+    sum = 0;
+    for (let i = 0; i < 4; i++) {
+      sum += Math.random() < 0.5 ? 0 : 1;
+    }
+  } while (sum === 0);
+  return sum;
+}
+
+function aiTurn() {
+  if (gameOver || currentPlayer !== "P2") return;
+
+  rollValue = aiRoll();
+  rollResultEl.textContent = `Roll: ${rollValue}`;
+  statusEl.textContent = `AI rolled ${rollValue}. Thinking...`;
+
+  const action = aiChooseAction("P2", rollValue);
+  if (!action) {
+    statusEl.textContent = `AI has no legal moves. Turn passes.`;
+    rollValue = null;
+    switchPlayer();
+    renderBoard();
+    return;
+  }
+
+  if (action.type === "enter") {
+    handleMoveAtIndex("P2", 0);
+  } else if (action.type === "move") {
+    handleMoveAtIndex("P2", action.from);
+  }
+}
+
+function aiChooseAction(player, roll) {
+  const moves = [];
+
+  // option: enter from start at 0 with roll 1
+  if (roll === 1 && startPieces[player] > 0) {
+    const occ = board[0];
+    if (!occ || (occ.owner !== player && !isRosette(0))) {
+      moves.push({ type: "enter", score: aiScoreEnter(player) });
+    }
+  }
+
+  // moves for existing pieces
+  for (let i = 0; i < BOARD_SIZE; i++) {
+    const u = board[i];
+    if (!u || u.owner !== player) continue;
+
+    const targetIndex = i + roll;
+
+    // bearing off
+    if (targetIndex === BOARD_SIZE) {
+      moves.push({ type: "move", from: i, score: 100 });
+      continue;
+    }
+    if (targetIndex > BOARD_SIZE) continue;
+
+    const targetOcc = board[targetIndex];
+
+    if (targetOcc && targetOcc.owner === player) continue;
+
+    if (targetOcc && targetOcc.owner !== player) {
+      if (isRosette(targetIndex)) continue;
+      moves.push({ type: "move", from: i, score: 80 });
+      continue;
+    }
+
+    let score = 10;
+    if (isRosette(targetIndex)) score += 20;
+    score += targetIndex * 0.5;
+    moves.push({ type: "move", from: i, score });
+  }
+
+  if (moves.length === 0) return null;
+
+  moves.sort((a, b) => b.score - a.score);
+  return moves[0];
+}
+
+function aiScoreEnter(player) {
+  const occ = board[0];
+  if (!occ) return 15;
+  if (occ.owner !== player && !isRosette(0)) return 50;
+  return 0;
 }
 
 rollBtn.addEventListener("click", rollDice);
